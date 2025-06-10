@@ -6,6 +6,11 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.*;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.select.PlainSelect;
+import net.sf.jsqlparser.statement.select.Select;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -21,11 +26,29 @@ public class CohQLToRedisTranslator {
     }
 
     public String translate(String cohql) throws JSQLParserException {
-        Expression expr = CCJSqlParserUtil.parseCondExpression(cohql);
-        String queryString = processExpression(expr);
+        try {
+            // Attempt to parse as full SQL statement first
+            Statement statement = CCJSqlParserUtil.parse(cohql);
+            if (statement instanceof Select) {
+                Select select = (Select) statement;
+                PlainSelect plainSelect = (PlainSelect) select.getSelectBody();
+                String tableName = ((Table) plainSelect.getFromItem()).getName();
+                Expression whereExpr = plainSelect.getWhere();
 
-        return removeRedundantParentheses(queryString);
+                String queryString = whereExpr != null ?
+                        processExpression(whereExpr) : "*";
+
+                return "FT.SEARCH " + tableName + "_index " + queryString;
+            }
+        } catch (JSQLParserException e) {
+            // Fallback to condition parsing if full statement parse fails
+            Expression expr = CCJSqlParserUtil.parseCondExpression(cohql);
+            return processExpression(expr);
+        }
+
+        throw new UnsupportedOperationException("Unsupported query type");
     }
+
 
     private String removeRedundantParentheses(String query) {
         if (query == null || query.isEmpty()) return query;
@@ -115,14 +138,22 @@ public class CohQLToRedisTranslator {
             return processEquals((EqualsTo) expr);
         } else if (expr instanceof NotEqualsTo) {
             return processNotEquals((NotEqualsTo) expr);
-        } else if (expr instanceof GreaterThan) {
-            return processRange((GreaterThan) expr, ">");
-        } else if (expr instanceof GreaterThanEquals) {
-            return processRange((GreaterThanEquals) expr, ">=");
-        } else if (expr instanceof MinorThan) {
-            return processRange((MinorThan) expr, "<");
-        } else if (expr instanceof MinorThanEquals) {
-            return processRange((MinorThanEquals) expr, "<=");
+        } else if (expr instanceof GreaterThan gt) {
+            String fieldName = ((Column) gt.getLeftExpression()).getColumnName();
+            String value = gt.getRightExpression().toString().replaceAll("'", "");
+            return processRange(fieldName, ">", value);  // Added return
+        } else if (expr instanceof GreaterThanEquals gte) {
+            String fieldName = ((Column) gte.getLeftExpression()).getColumnName();
+            String value = gte.getRightExpression().toString().replaceAll("'", "");
+            return processRange(fieldName, ">=", value); // Added return
+        } else if (expr instanceof MinorThan mt) {
+            String fieldName = ((Column) mt.getLeftExpression()).getColumnName();
+            String value = mt.getRightExpression().toString().replaceAll("'", "");
+            return processRange(fieldName, "<", value);  // Added return
+        } else if (expr instanceof MinorThanEquals mte) {
+            String fieldName = ((Column) mte.getLeftExpression()).getColumnName();
+            String value = mte.getRightExpression().toString().replaceAll("'", "");
+            return processRange(fieldName, "<=", value); // Added return
         } else if (expr instanceof InExpression) {
             return processIn((InExpression) expr);
         } else if (expr instanceof LikeExpression) {
@@ -198,26 +229,35 @@ public class CohQLToRedisTranslator {
         return "-@" + fieldName + ":" + value;
     }
 
-    private String processRange(BinaryExpression expr, String operator) {
-        String field = formatField(expr.getLeftExpression());
-        String value = formatValue(expr.getRightExpression());
-        try {
-            if (value.contains(".")) {
-                Double.parseDouble(value);
-            } else {
-                Integer.parseInt(value);
-            }
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Range argument must be a number, yet it is: " + value);
+    private String processRange(String fieldName, String operator, String value) {
+        String fieldType = fieldTypes.getOrDefault(fieldName, "TEXT");
+
+        // Handle date and text ranges
+        if (fieldType.equals("TEXT") || value.contains("-")) {
+            return switch (operator) {
+                case ">=" -> "@%s:[%s +inf]".formatted(fieldName, value);
+                case ">" -> "@%s:[(%s +inf]".formatted(fieldName, value);
+                case "<=" -> "@%s:[-inf %s]".formatted(fieldName, value);
+                case "<" -> "@%s:[-inf (%s]".formatted(fieldName, value);
+                default -> throw new IllegalArgumentException("Unsupported operator: " + operator);
+            };
         }
-        return switch (operator) {
-            case ">" -> String.format("%s:[(%s +inf]", field, value);
-            case ">=" -> String.format("%s:[%s +inf]", field, value);
-            case "<" -> String.format("%s:[-inf (%s]", field, value);
-            case "<=" -> String.format("%s:[-inf %s]", field, value);
-            default -> throw new IllegalArgumentException("Unsupported operator: " + operator);
-        };
+
+        // Handle numeric ranges
+        try {
+            Double.parseDouble(value);
+            return switch (operator) {
+                case ">=" -> "@%s:[%s +inf]".formatted(fieldName, value);
+                case ">" -> "@%s:[(%s +inf]".formatted(fieldName, value);
+                case "<=" -> "@%s:[-inf %s]".formatted(fieldName, value);
+                case "<" -> "@%s:[-inf (%s]".formatted(fieldName, value);
+                default -> throw new IllegalArgumentException("Unsupported operator: " + operator);
+            };
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid numeric range value: " + value);
+        }
     }
+
 
     private String processIn(InExpression inExpr) {
         String fieldName = inExpr.getLeftExpression().toString();

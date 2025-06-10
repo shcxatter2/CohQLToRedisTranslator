@@ -4,10 +4,43 @@ import net.sf.jsqlparser.JSQLParserException;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+
+import static java.util.Map.entry;
 
 public class CohQLToRedisTranslatorTest {
+    private static final Map<String, String> FIELD_TYPES = Map.ofEntries(
+            entry("propName1", "TEXT"),
+            entry("propName2", "TEXT"),
+            entry("propName3", "TEXT"),
+            entry("propName4", "TEXT"),
+            entry("propName5", "TEXT"),
+            entry("propName6", "TEXT"),
+            entry("propName7", "TEXT"),
+            entry("propName8", "TEXT"),
+            entry("propName9", "TEXT"),
+            entry("propName10", "TEXT"),
+            entry("propName11", "TEXT"),
+            entry("propName12", "TEXT"),
+            entry("propName13", "TEXT"),
+            entry("category", "TEXT"),
+            entry("status", "TEXT"),
+            entry("username", "TEXT"),
+            entry("department", "TEXT"),
+            entry("role", "TEXT"),
+            entry("price", "NUMERIC"),
+            entry("amount", "NUMERIC"),
+            entry("productId", "NUMERIC"),
+            entry("customerId", "NUMERIC")   ,
+            entry("location", "TEXT") ,
+            entry("restockDate", "TEXT"),
+            entry("orderDate", "TEXT"),
+            entry("lastPurchase", "TEXT"),
+            entry("city", "TEXT")   ,
+            entry("name", "TEXT")
+    );
     public static void main(String[] args) throws JSQLParserException {
-        CohQLToRedisTranslator translator = new CohQLToRedisTranslator(new HashMap<>());
+        CohQLToRedisTranslator translator = new CohQLToRedisTranslator(FIELD_TYPES);
 
         // Test 1: Simple equality
         String cohql1 = "propName1 = 'value1'";
