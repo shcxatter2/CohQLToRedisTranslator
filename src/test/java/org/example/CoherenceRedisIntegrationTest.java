@@ -71,7 +71,7 @@ public class CoherenceRedisIntegrationTest {
         );
         System.out.println("Index created successfully");
 
-        translator = new CohQLToRedisTranslator(FIELD_TYPES);
+        translator = new CohQLToRedisTranslator(FIELD_TYPES, null);
         Thread.sleep(2000);
         loadTestData();
 

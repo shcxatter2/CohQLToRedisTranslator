@@ -40,7 +40,7 @@ public class CohQLToRedisTranslatorTest {
             entry("name", "TEXT")
     );
     public static void main(String[] args) throws JSQLParserException {
-        CohQLToRedisTranslator translator = new CohQLToRedisTranslator(FIELD_TYPES);
+        CohQLToRedisTranslator translator = new CohQLToRedisTranslator(FIELD_TYPES, null);
 
         // Test 1: Simple equality
         String cohql1 = "propName1 = 'value1'";

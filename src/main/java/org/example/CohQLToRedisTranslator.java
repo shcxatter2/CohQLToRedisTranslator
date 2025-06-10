@@ -20,9 +20,12 @@ import java.util.stream.Collectors;
 public class CohQLToRedisTranslator {
 
     private final Map<String, String> fieldTypes;
+    private final String indexSuffix;
 
-    public CohQLToRedisTranslator(Map<String, String> fieldTypes) {
+
+    public CohQLToRedisTranslator(Map<String, String> fieldTypes, String indexSuffix) {
         this.fieldTypes = fieldTypes;
+        this.indexSuffix = indexSuffix == null ? "" : indexSuffix;
     }
 
     public String translate(String cohql) throws JSQLParserException {
@@ -38,7 +41,7 @@ public class CohQLToRedisTranslator {
                 String queryString = whereExpr != null ?
                         processExpression(whereExpr) : "*";
 
-                return "FT.SEARCH " + tableName + "_index " + queryString;
+                return "FT.SEARCH " + tableName + indexSuffix + " " + queryString;
             }
         } catch (JSQLParserException e) {
             // Fallback to condition parsing if full statement parse fails
