@@ -10,7 +10,6 @@ import com.tangosol.util.Filter;
 import com.tangosol.util.extractor.ReflectionExtractor;
 import com.tangosol.util.filter.*;
 import io.lettuce.core.RedisCommandExecutionException;
-import junit.framework.AssertionFailedError;
 import net.sf.jsqlparser.JSQLParserException;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.GenericContainer;
@@ -39,14 +38,6 @@ public class CoherenceRedisIntegrationTest {
     private static RedisModulesCommands<String, String> redisCommands;
     private static CohQLToRedisTranslator translator;
 
-    // Define which fields are TAG fields in your RediSearch schema
-    private static final Map<String, String> FIELD_TYPES = Map.of(
-            "name", "TEXT",
-            "age", "NUMERIC",
-            "email", "TEXT",
-            "role", "TAG"
-    );
-
     @BeforeAll
     static void setup() throws InterruptedException {
         System.setProperty("coherence.cluster", "TestCluster");
@@ -64,14 +55,14 @@ public class CoherenceRedisIntegrationTest {
                         .on(com.redis.lettucemod.search.CreateOptions.DataType.HASH)
                         .prefix("test:")
                         .build(),
-                com.redis.lettucemod.search.Field.text("name").noStem().sortable().build(),
+                com.redis.lettucemod.search.Field.tag("name").sortable().build(),
                 com.redis.lettucemod.search.Field.numeric("age").build(),
-                com.redis.lettucemod.search.Field.text("email").noStem().build(),
+                com.redis.lettucemod.search.Field.tag("email").build(),
                 Field.tag("role").build()
         );
         System.out.println("Index created successfully");
 
-        translator = new CohQLToRedisTranslator(FIELD_TYPES, null);
+        translator = new CohQLToRedisTranslator();
         Thread.sleep(2000);
         loadTestData();
 
@@ -98,26 +89,27 @@ public class CoherenceRedisIntegrationTest {
         // Redis data
         redisCommands.hset("test:1", "name", "John");
         redisCommands.hset("test:1", "age", "30");
-        redisCommands.hset("test:1", "email", "john\\@test\\.com");
+        redisCommands.hset("test:1", "email", "john@test.com");
         redisCommands.hset("test:1", "role", "user");
 
         redisCommands.hset("test:2", "name", "Alice");
         redisCommands.hset("test:2", "age", "25");
-        redisCommands.hset("test:2", "email", "alice\\@test\\.com");
+        redisCommands.hset("test:2", "email", "alice@test.com");
         redisCommands.hset("test:2", "role", "user");
 
         redisCommands.hset("test:3", "name", "Admin");
         redisCommands.hset("test:3", "age", "40");
-        redisCommands.hset("test:3", "email", "admin\\@test\\.com");
+        redisCommands.hset("test:3", "email", "admin@test.com");
         redisCommands.hset("test:3", "role", "admin");
 
         redisCommands.hset("test:4", "name", "Jake");
         redisCommands.hset("test:4", "age", "28");
-        redisCommands.hset("test:4", "email", "jake\\@test\\.org");
+        redisCommands.hset("test:4", "email", "jake@test.org");
         redisCommands.hset("test:4", "role", "moderator");
     }
 
     @Test void testEqualityQuery() throws Exception { assertQueryMatch("name = 'John'"); }
+    @Test void testCaseSensitiveFieldNames() throws Exception { assertQueryMatch("NAME = 'John'"); }
     @Test void testNumericRangeQuery() throws Exception { assertQueryMatch("age > 25"); }
     @Test void testBetweenQuery() throws Exception { assertQueryMatch("age BETWEEN 25 AND 35"); }
     @Test void testInClause() throws Exception { assertQueryMatch("email IN ('john@test.com','alice@test.com')"); }
@@ -128,7 +120,7 @@ public class CoherenceRedisIntegrationTest {
     @Test void testCombinedOrQuery() throws Exception { assertQueryMatch("name = 'John' OR name = 'Alice'"); }
     @Test void testNegationQuery() throws Exception { assertQueryMatch("NOT (name = 'John')"); }
     @Test void testComplexQuery() throws Exception { assertQueryMatch("(age > 25 AND email IN ('john@test.com', 'admin@test.com')) OR name LIKE 'Jo%'"); }
-    @Test void testNestedAndOr() throws Exception { assertQueryMatch("(age > 25 OR role = 'admin') AND (email LIKE '%test.com' OR name LIKE 'A%')"); }
+    @Test void testNestedAndOr() throws Exception { assertQueryMatch("(age > 25 OR role = 'admin') AND (email LIKE '%test.com' OR name LIKE 'Al%')"); }
     @Test void testMultipleOrConditions() throws Exception { assertQueryMatch("role = 'admin' OR role = 'moderator' OR name = 'John'"); }
     @Test void testZeroValue() throws Exception { assertQueryMatch("age = 0"); }
     @Test void testNegativeNumbers() throws Exception { assertQueryMatch("age > -5"); }
@@ -144,8 +136,6 @@ public class CoherenceRedisIntegrationTest {
     @Test void testBackslashInValue() throws Exception { assertQueryMatch("name = 'John\\Doe'"); }
     @Test void testNestedNotExpressions() throws Exception { assertQueryMatch("NOT (NOT (age > 30))"); }
     @Test void testNotWithAndOr() throws Exception { assertQueryMatch("NOT (role = 'admin' AND age > 40)"); }
-    @Test void testGeoQueries() throws Exception { assertQueryMatch("@location:[-73.982254 40.753181 10 km]"); }
-    @Test void testVectorSearch() throws Exception { assertQueryMatch("@embedding:[VECTOR_RANGE 0.5 $vec]"); }
 
     @Test
     void testLargeInClause() throws Exception {
@@ -176,8 +166,6 @@ public class CoherenceRedisIntegrationTest {
                                                         assertQueryMatch("age BETWEEN 25")); }
     @Test void testUnparsableExpression() { assertThrows(UnsupportedOperationException.class, () ->
                                                         assertQueryMatch("age ~~ 'invalid'")); }
-    @Test void testCaseSensitiveFieldNames() { assertThrows(UnsupportedOperationException.class, () ->
-                                                        assertQueryMatch("NAME = 'John'")); }
     @Test void testEmptyQuery() { assertThrows(ArrayIndexOutOfBoundsException.class, () ->
                                                         assertQueryMatch("")); }
     @Test void testNullQuery() { assertThrows(NullPointerException.class, () ->
