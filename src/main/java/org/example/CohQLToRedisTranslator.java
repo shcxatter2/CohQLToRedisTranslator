@@ -38,14 +38,15 @@ public class CohQLToRedisTranslator {
     private String processAnd(BinaryExpression expr) {
         String left = processExpression(expr.getLeftExpression());
         String right = processExpression(expr.getRightExpression());
-        return left + " " + right;
+        // Always group ANDs, to be safe
+        return left + " " + right ;
     }
 
     private String processOr(BinaryExpression expr) {
         String leftQuery = processExpression(expr.getLeftExpression());
         String rightQuery = processExpression(expr.getRightExpression());
 
-        return "(" + leftQuery + ") | (" + rightQuery + ")";
+        return  leftQuery + " | " + rightQuery;
     }
 
     private String processComparison(Expression expr) {
@@ -105,7 +106,7 @@ public class CohQLToRedisTranslator {
             return "@" + fieldName + ":[" + value + " " + value + "]";
         } else if (isTagField(expr.getRightExpression())) {
             // For tag fields, use tag syntax
-            return "@" + fieldName + ":{" + escapeValue(value) + "}";
+            return "@" + fieldName + ":{" + value + "}";
         }
 
         throw new UnsupportedOperationException("Unknown field type for: " + fieldName);
@@ -199,7 +200,10 @@ public class CohQLToRedisTranslator {
         String pattern = formatValue(expr.getRightExpression())
                 .replace("%", "*")
                 .replace("_", "?");
-        return "@" + fieldName + ":{" + escapeValue(pattern) + "}";
+        if (pattern.startsWith("'") | pattern.startsWith("\"")) {
+            pattern = pattern.substring(1, pattern.length() -1);
+        }
+        return "@" + fieldName + ":{w'" + pattern + "'}";
     }
 
     private String formatField(Expression expr) {

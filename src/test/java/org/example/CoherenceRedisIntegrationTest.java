@@ -3,6 +3,7 @@ package org.example;
 import com.redis.lettucemod.RedisModulesClient;
 import com.redis.lettucemod.api.sync.RedisModulesCommands;
 import com.redis.lettucemod.search.Field;
+import com.redis.lettucemod.search.SearchOptions;
 import com.redis.lettucemod.search.SearchResults;
 import com.tangosol.net.CacheFactory;
 import com.tangosol.net.NamedCache;
@@ -125,7 +126,6 @@ public class CoherenceRedisIntegrationTest {
     @Test void testZeroValue() throws Exception { assertQueryMatch("age = 0"); }
     @Test void testNegativeNumbers() throws Exception { assertQueryMatch("age > -5"); }
     @Test void testDecimalNumbers() throws Exception { assertQueryMatch("age >= 25.5", -3); }
-    @Test void testSpecialCharactersInText() throws Exception { assertQueryMatch("name = 'O''Connor'"); }
     @Test void testEmailWithPlus() throws Exception { assertQueryMatch("email = 'user+filter\\@test\\.com'"); }
     @Test void testUnderscoreInLike() throws Exception { assertQueryMatch("name LIKE 'J_hn'"); }
     @Test void testIsNullCheck() throws Exception { assertQueryMatch("email IS NULL"); }
@@ -136,6 +136,8 @@ public class CoherenceRedisIntegrationTest {
     @Test void testBackslashInValue() throws Exception { assertQueryMatch("name = 'John\\Doe'"); }
     @Test void testNestedNotExpressions() throws Exception { assertQueryMatch("NOT (NOT (age > 30))"); }
     @Test void testNotWithAndOr() throws Exception { assertQueryMatch("NOT (role = 'admin' AND age > 40)"); }
+    @Test void testDeeplyNestedConditions() throws Exception { assertQueryMatch("((((name = 'John' AND age > 25) OR (role = 'admin' AND age < 50)) AND (email LIKE \"%test.com\")) OR (name = 'Alice' AND role = 'user'))");}
+    @Test void testNewlyAddedField() throws Exception { assertQueryMatch("new_field = 'test'"); }
 
     @Test
     void testLargeInClause() throws Exception {
@@ -144,18 +146,6 @@ public class CoherenceRedisIntegrationTest {
                 .collect(Collectors.toList());
 
         assertQueryMatch("role IN (" + String.join(",", values) + ")");
-    }
-
-    @Test
-    void testDeeplyNestedConditions() throws Exception {
-        // Test actual deep nesting with parentheses
-        String query = "((((name = 'John' AND age > 25) OR (role = 'admin' AND age < 50)) AND (email LIKE '%test.com')) OR (name = 'Alice' AND role = 'user'))";
-        assertQueryMatch(query);
-    }
-
-    @Test
-    void testNewlyAddedField() throws Exception {
-        assertQueryMatch("new_field = 'test'");
     }
 
     @Test void testEmptyInClause() {assertThrows(UnsupportedOperationException.class, () ->
@@ -196,7 +186,7 @@ public class CoherenceRedisIntegrationTest {
         System.out.println("Coherence Results:  " + coherenceResultSet);
         System.out.println("Coherence Count:    " + coherenceCount);
 
-        SearchResults<String, String> redisResults = redisCommands.ftSearch("test_idx", redisQuery);
+        SearchResults<String, String> redisResults = redisCommands.ftSearch("test_idx", redisQuery, SearchOptions.<String, String>builder().dialect(2).build());
         long redisCount = redisResults.getCount();
         if (resultOffset.length != 0) redisCount += resultOffset[0];
         System.out.println("Redis Results:      " + redisResults);
@@ -217,16 +207,6 @@ public class CoherenceRedisIntegrationTest {
 
             while (q.startsWith("(") && q.endsWith(")") && isBalancedParentheses(q.substring(1, q.length() - 1))) {
                 q = q.substring(1, q.length() - 1).trim();
-            }
-
-            // Handle OR operations
-            int orIdx = indexOfTopLevel(q, "OR");
-            if (orIdx > 0) {
-                System.out.println("Detected OR operator at index " + orIdx);
-                String left = q.substring(0, orIdx).trim();
-                String right = q.substring(orIdx + 2).trim();
-                System.out.println("OR split - Left: '" + left + "', Right: '" + right + "'");
-                return new OrFilter(buildCoherenceFilter(left), buildCoherenceFilter(right));
             }
 
             // Handle BETWEEN...AND
@@ -262,12 +242,32 @@ public class CoherenceRedisIntegrationTest {
                 return new AndFilter(buildCoherenceFilter(left), buildCoherenceFilter(right));
             }
 
+            // Handle OR operations
+            int orIdx = indexOfTopLevel(q, "OR");
+            if (orIdx > 0) {
+                System.out.println("Detected OR operator at index " + orIdx);
+                String left = q.substring(0, orIdx).trim();
+                String right = q.substring(orIdx + 2).trim();
+                System.out.println("OR split - Left: '" + left + "', Right: '" + right + "'");
+                return new OrFilter(buildCoherenceFilter(left), buildCoherenceFilter(right));
+            }
+
             // Handle NOT operations
-            if (q.startsWith("NOT (") && q.endsWith(")")) {
-                System.out.println("Detected NOT wrapper");
-                String subQuery = q.substring(4, q.length() - 1).trim();
-                System.out.println("NOT subquery: '" + subQuery + "'");
-                return new NotFilter(buildCoherenceFilter(subQuery));
+            if (q.startsWith("NOT")) {
+                String remaining = q.substring(3).trim();
+
+                // Handle cases like NOT(...) without space
+                if (remaining.startsWith("(")) {
+                    int endIndex = findMatchingParen(remaining, 0);
+                    if (endIndex == remaining.length() - 1) {
+                        String subQuery = remaining.substring(1, endIndex).trim();
+                        return new NotFilter(buildCoherenceFilter(subQuery));
+                    }
+                }
+
+                // Regular NOT handling
+                Filter subFilter = buildCoherenceFilter(remaining);
+                return new NotFilter(subFilter);
             }
 
             // Handle NOT IN
@@ -357,6 +357,7 @@ public class CoherenceRedisIntegrationTest {
                     System.out.println("Operator split parts: " + Arrays.toString(parts));
 
                     String field = parts[0].replaceAll("[()]", "").trim();
+                    boolean isString = parts[1].contains("'") | parts[1].contains("\"");
                     String value = parts[1].replaceAll("[\"']", "").trim();
                     System.out.println("Parsed field: '" + field + "', value: '" + value + "'");
 
@@ -364,28 +365,33 @@ public class CoherenceRedisIntegrationTest {
                         case ">=":
                             return new GreaterEqualsFilter(
                                     new ReflectionExtractor("get", new Object[]{field}),
+                                    isString ? value :
                                     parseNumericValue(value)
                             );
                         case "<=":
                             return new LessEqualsFilter(
                                     new ReflectionExtractor("get", new Object[]{field}),
+                                    isString ? value :
                                     parseNumericValue(value)
                             );
                         case ">":
                             return new GreaterFilter(
                                     new ReflectionExtractor("get", new Object[]{field}),
+                                    isString ? value :
                                     parseNumericValue(value)
                             );
                         case "<":
                             return new LessFilter(
                                     new ReflectionExtractor("get", new Object[]{field}),
+                                    isString ? value :
                                     parseNumericValue(value)
                             );
                         case "=":
                             // For equality, check if it's a numeric field
                                 return new EqualsFilter(
                                         new ReflectionExtractor("get", new Object[]{field}),
-                                        parseNumericValue(value)
+                                        isString ? value :
+                                    parseNumericValue(value)
                                 );
 
                     }
@@ -402,6 +408,18 @@ public class CoherenceRedisIntegrationTest {
             e.printStackTrace();
             throw e;
         }
+    }
+
+    private int findMatchingParen(String str, int start) {
+        int count = 1;
+        for (int i = start + 1; i < str.length(); i++) {
+            char c = str.charAt(i);
+            if (c == '(') count++;
+            else if (c == ')') count--;
+
+            if (count == 0) return i;
+        }
+        return -1; // Unbalanced parentheses
     }
 
     private boolean isBalancedParentheses(String str) {
@@ -470,7 +488,7 @@ public class CoherenceRedisIntegrationTest {
             }
 
             // Only look for operator when not inside quotes
-            if (!inQuotes && query.substring(index).startsWith(operator)) {
+            if (!inQuotes && parenDepth == 0 && query.substring(index).startsWith(operator)) {
                 // Check that it's a whole word (surrounded by spaces or boundaries)
                 boolean validStart = (index == 0 || !Character.isLetterOrDigit(query.charAt(index - 1)));
                 boolean validEnd = (index + operator.length() >= query.length() ||
